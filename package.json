@@ -1,0 +1,12 @@
+{
+  "name": "re-phrasing-tool",
+  "version": "1.0.0",
+  "description": "A tool for re-phrasing text.",
+  "main": "text_humanizer/src/main.py",
+  "scripts": {
+    "start": "python text_humanizer/src/main.py"
+  },
+  "dependencies": {
+    "chromadb": "*"
+  }
+}

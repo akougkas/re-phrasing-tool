@@ -1,0 +1,1 @@
+print(default_api.natural_language_write_file(language = "python", path = "text_humanizer/src/quality_control.py", prompt = "This module will ensure the quality of the output. Create an empty file for now."))
