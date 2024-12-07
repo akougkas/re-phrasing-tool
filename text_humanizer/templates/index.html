@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Text Humanizer</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    
+    <!-- Preload critical assets -->
+    <link rel="preload" href="{{ url_for('static', filename='css/chat.css') }}" as="style">
+    <link rel="preload" href="{{ url_for('static', filename='js/chat.js') }}" as="script">
+    
+    <!-- Load stylesheets -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+    
+    <style>
+        /* Critical CSS for initial render */
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 200px;
+        }
+        .error-message {
+            color: #c62828;
+            background-color: #ffebee;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid #c62828;
+        }
+        .chat-container {
+            flex-grow: 1;
+            margin: 20px 0;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            background-color: white;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+        .model-info {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 12px 16px;
+            border-radius: 16px;
+            max-width: 80%;
+            word-wrap: break-word;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            line-height: 1.4;
+        }
+        .message.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: auto;
+            color: #1565c0;
+        }
+        .assistant-message {
+            background-color: #f5f5f5;
+            margin-right: auto;
+            color: #333;
+        }
+        .input-area {
+            position: sticky;
+            bottom: 0;
+            background-color: white;
+            padding: 15px;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .input-area input {
+            flex-grow: 1;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 24px;
+            font-size: 16px;
+            background-color: #f8f9fa;
+            transition: all 0.2s ease;
+        }
+        .input-area input:focus {
+            outline: none;
+            border-color: #2196F3;
+            background-color: white;
+            box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
+        }
+        .input-area input::placeholder {
+            color: #666;
+        }
+        .input-area button {
+            padding: 12px 24px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 24px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+            min-width: 100px;
+        }
+        .input-area button:hover {
+            background-color: #1976D2;
+        }
+        .input-area button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .char-count {
+            position: absolute;
+            right: 140px;
+            top: -20px;
+            font-size: 0.8em;
+            color: #666;
+        }
+        /* Remove default tooltip */
+        input::-webkit-calendar-picker-indicator {
+            display: none;
+        }
+        input[type="text"]::-webkit-contacts-auto-fill-button {
+            display: none;
+        }
+        input[list]::-webkit-list-button {
+            display: none;
+        }
+        input::-webkit-inner-spin-button,
+        input::-webkit-outer-spin-button,
+        input::-webkit-clear-button {
+            display: none;
+        }
+        /* Enhanced responsive design */
+        @media (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+            .container {
+                padding: 15px;
+            }
+            .user-message, .assistant-message {
+                margin-left: 5%;
+                margin-right: 5%;
+            }
+            .input-area {
+                flex-direction: column;
+            }
+            .input-area button {
+                width: 100%;
+                margin-top: 10px;
+            }
+        }
+
+        /* Loading spinner */
+        .spinner {
+            display: none;
+            width: 40px;
+            height: 40px;
+            margin: 20px auto;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #2196F3;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Enhanced error styles */
+        .error-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #ffebee;
+            color: #c62828;
+            padding: 15px 25px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            z-index: 1000;
+            display: none;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+
+        /* Accessibility improvements */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0,0,0,0);
+            border: 0;
+        }
+
+        /* Input focus states */
+        .input-area input:focus {
+            outline: none;
+            border-color: #2196F3;
+            box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+        }
+
+        .input-area button:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.4);
+        }
+
+        /* Disabled state styles */
+        .input-area button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        /* Enhanced loading indicator */
+        .stream-loading {
+            display: inline-block;
+            margin-left: 5px;
+        }
+        .stream-loading span {
+            display: inline-block;
+            width: 5px;
+            height: 5px;
+            background-color: #2196F3;
+            border-radius: 50%;
+            margin: 0 2px;
+            animation: pulse 1s infinite;
+        }
+        .stream-loading span:nth-child(2) { animation-delay: 0.2s; }
+        .stream-loading span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.3; }
+            50% { transform: scale(1.2); opacity: 1; }
+        }
+
+        /* Progressive loading styles */
+        .message-chunk {
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        .message-chunk.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Text Humanizer</h1>
+        
+        {% if error %}
+        <div class="error-message" role="alert">
+            {{ error }}
+        </div>
+        {% endif %}
+        
+        {% if model_info %}
+        <div class="model-info" role="status">
+            {{ model_info }}
+        </div>
+        {% endif %}
+
+        <div class="chat-container" id="chatContainer" role="log" aria-live="polite">
+            {% if query %}
+            <div class="message user-message show" role="article">{{ query }}</div>
+            {% endif %}
+            
+            {% if response %}
+            <div class="message assistant-message show" role="article">{{ response }}</div>
+            {% endif %}
+        </div>
+
+        <form id="chat-form" class="input-area" action="/process" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="text" 
+                   id="user-input" 
+                   name="text" 
+                   placeholder="Enter your text here..." 
+                   aria-label="User input" 
+                   maxlength="1000" 
+                   autocomplete="off"
+                   required>
+            <button type="submit">Send</button>
+            <div class="validation-error" style="display: none;"></div>
+            <div class="char-count">1000 characters remaining</div>
+        </form>
+        
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner"></div>
+        </div>
+    </div>
+
+    <!-- Load JavaScript -->
+    <script src="{{ url_for('static', filename='js/chat.js') }}" defer></script>
+    
+    <!-- Initialize the app when content is loaded -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Show loading state
+            const loading = document.getElementById('loading');
+            const container = document.querySelector('.container');
+            
+            if (loading && container) {
+                loading.style.display = 'flex';
+                container.style.opacity = '0.5';
+                
+                // Hide loading after content is ready
+                setTimeout(() => {
+                    loading.style.display = 'none';
+                    container.style.opacity = '1';
+                }, 500);
+            }
+        });
+    </script>
+</body>
+</html>

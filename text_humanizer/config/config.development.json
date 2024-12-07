@@ -1,0 +1,26 @@
+{
+    "app_name": "text-humanizer",
+    "log_level": "DEBUG", 
+    "debug_mode": true,
+    "host": "127.0.0.1",
+    "port": 5000,
+    "csrf_enabled": true,
+    "csrf_check_default": false,
+    "persist_directory": "text_humanizer/data/chroma_db",
+    "cache_settings": {
+        "type": "simple",
+        "timeout": 300
+    },
+    "model_settings": {
+        "endpoint_url": "http://localhost:1234",
+        "model_name": "gpt2",
+        "config_name": "development"
+    },
+    "llm_settings": {
+        "health_check_interval": 120,
+        "health_check_timeout": 10,
+        "max_retries": 3,
+        "retry_delay": 2,
+        "request_timeout": 30
+    }
+}

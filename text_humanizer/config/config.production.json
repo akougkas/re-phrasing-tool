@@ -1,0 +1,19 @@
+{
+    "app_name": "text-humanizer",
+    "log_level": "WARNING",
+    "debug_mode": false,
+    "host": "0.0.0.0",
+    "port": 5000,
+    "csrf_enabled": true,
+    "csrf_check_default": false,
+    "persist_directory": "text_humanizer/data/chroma_db",
+    "cache_settings": {
+        "type": "redis",
+        "timeout": 300
+    },
+    "model_settings": {
+        "endpoint_url": "http://localhost:1234",
+        "model_name": "gpt2",
+        "config_name": "production"
+    }
+}

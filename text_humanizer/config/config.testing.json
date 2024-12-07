@@ -1,0 +1,20 @@
+{
+    "app_name": "text-humanizer",
+    "log_level": "DEBUG",
+    "debug_mode": true,
+    "testing": true,
+    "host": "127.0.0.1",
+    "port": 5000,
+    "csrf_enabled": true,
+    "csrf_check_default": false,
+    "persist_directory": "text_humanizer/data/chroma_db",
+    "cache_settings": {
+        "type": "simple",
+        "timeout": 60
+    },
+    "model_settings": {
+        "endpoint_url": "http://localhost:1234",
+        "model_name": "mock-model",
+        "config_name": "testing"
+    }
+}
