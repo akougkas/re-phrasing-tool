@@ -60,3 +60,48 @@ def render_context_options(context_segments):
     selected_ids = ['qa1', 'qa3']
     print(f"Simulated selection: {selected_ids}")
     return selected_ids
+
+def display_typing_indicator():
+    """
+    Displays a typing indicator to simulate the model thinking or typing.
+    """
+    print("The model is typing...")
+
+
+def send_message(message):
+    """
+    Sends the message when Enter is pressed.
+    """
+    print("Message sent:", message)
+
+
+def handle_input(input_text):
+    """
+    Handles input text, sending the message or creating a new line.
+    """
+    if input_text.endswith("\n"):
+        send_message(input_text.strip())
+    else:
+        print("New line added")
+
+
+def display_welcome_message():
+    """
+    Displays a welcome message with LLM provider and active model information.
+    """
+    print("Welcome to the chat! LLM Provider: OpenAI, Available Models: GPT-3, GPT-4, Active Model: GPT-4")
+
+
+def clear_chat_history():
+    """
+    Clears the chat history.
+    """
+    print("Chat history cleared")
+
+
+# Example usage
+if __name__ == "__main__":
+    display_welcome_message()
+    display_typing_indicator()  # Simulate typing indicator
+    handle_input("Hello, how are you?\n")  # Simulate sending a message
+    clear_chat_history()  # Simulate clearing chat history

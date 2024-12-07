@@ -15,50 +15,18 @@ from datetime import datetime, timedelta
 import psutil
 import hashlib
 
-from text_humanizer.providers.base_llm_provider import BaseLLMProvider, LLMConfig
+from text_humanizer.providers.base_llm_provider import BaseLLMProvider
 from text_humanizer.utils.logger import logger
-try:
-    from text_humanizer.config import config as llm_config
-except ImportError:
-    # Default configuration if module not found
-    class DefaultConfig:
-        LLM_MAX_RETRIES = 3
-        LLM_RETRY_DELAY = 1
-        LLM_FALLBACK_MODELS = ["gpt2", "gpt2-medium"]
-        LLM_HEALTH_CHECK_INTERVAL = 60
-        LLM_HEALTH_CHECK_TIMEOUT = 5
-        LLM_CACHE_TTL = 3600  # 1 hour default
-    llm_config = {"default": DefaultConfig}
+from text_humanizer.config.model_config import ModelConfigs, ModelType, ModelConfig
 
 class LocalLLMProvider(BaseLLMProvider):
     """Provider for interacting with local LLM endpoint with fallback and retry mechanisms."""
     
-    def __init__(self, endpoint_url: Optional[str] = None,
-                 model_name: Optional[str] = None,
-                 config_name: str = "default"):
+    def __init__(self, model_type: ModelType = ModelType.CHAT):
         """Initialize the provider with configuration."""
-        config_class = llm_config.get(config_name, llm_config["default"])()
-        
-        # Get LLM settings from config
-        llm_settings = getattr(config_class, 'llm_settings', {})
-        
-        # Create LLM config with defaults
-        llm_config_obj = LLMConfig(
-            endpoint_url=endpoint_url or os.getenv('LLM_ENDPOINT_URL', 'http://localhost:1234'),
-            model_name=model_name or getattr(config_class, 'LLM_FALLBACK_MODELS', ["gpt2"])[0],
-            timeout=llm_settings.get('request_timeout', 30),
-            max_tokens=getattr(config_class, 'LLM_MAX_TOKENS', 2048)
-        )
-        
-        # Initialize base class
-        super().__init__(llm_config_obj)
-        
-        # Store configuration values with defaults
-        self.max_retries = llm_settings.get('max_retries', 3)
-        self.retry_delay = llm_settings.get('retry_delay', 1)
-        self.fallback_models = getattr(config_class, 'LLM_FALLBACK_MODELS', ["gpt2", "gpt2-medium"])
-        self.health_check_interval = llm_settings.get('health_check_interval', 60)
-        self.health_check_timeout = llm_settings.get('health_check_timeout', 5)
+        self.model_type = model_type
+        self.config = ModelConfigs.get_config(model_type)
+        self.system_prompt = ModelConfigs.get_system_prompt(model_type)
         
         # Performance metrics
         self.metrics = {
@@ -71,20 +39,43 @@ class LocalLLMProvider(BaseLLMProvider):
         }
         
         # Cache configuration
-        self.cache_ttl = getattr(config_class, 'LLM_CACHE_TTL', 3600)  # 1 hour default
         self.cache = {}
         self.cache_timestamps = {}
+        self.cache_ttl = 3600  # 1 hour default
         
-        # Initialize health tracking
+        # Health tracking
         self.health_status = {}
         self.last_health_check = {}
+        self.health_check_interval = 60
+        self.health_check_timeout = 5
+        self.max_retries = 3
+        self.retry_delay = 1
         
-        # Verify connection with more graceful handling
+        # Verify connection
         try:
             self.verify_connection()
         except Exception as e:
             logger.warning(f"Initial connection verification failed: {str(e)}")
-
+            
+    def configure(self, model_type: ModelType, **kwargs) -> None:
+        """
+        Configure the provider for a different model type or update settings.
+        
+        Args:
+            model_type: The type of model to configure for
+            **kwargs: Additional configuration parameters
+        """
+        self.model_type = model_type
+        self.config = ModelConfigs.get_config(model_type)
+        self.system_prompt = ModelConfigs.get_system_prompt(model_type)
+        
+        # Update config with any provided kwargs
+        for key, value in kwargs.items():
+            if hasattr(self.config, key):
+                setattr(self.config, key, value)
+                
+        logger.info(f"Configured provider for {model_type.value} with {kwargs}")
+        
     def _get_cache_key(self, prompt: str, **kwargs) -> str:
         """Generate a unique cache key based on prompt and parameters."""
         cache_dict = {'prompt': prompt, **kwargs}
@@ -160,8 +151,8 @@ class LocalLLMProvider(BaseLLMProvider):
                     time.sleep(self.retry_delay * (2 ** attempt))
             
             # Try fallback models
-            current_model_idx = self.fallback_models.index(self.config.model_name)
-            for model in self.fallback_models[current_model_idx + 1:]:
+            current_model_idx = ModelConfigs.get_fallback_models(self.model_type).index(self.config.model_name)
+            for model in ModelConfigs.get_fallback_models(self.model_type)[current_model_idx + 1:]:
                 try:
                     logger.info(f"Attempting fallback to model: {model}")
                     self.switch_model(model_name=model)
@@ -216,103 +207,26 @@ class LocalLLMProvider(BaseLLMProvider):
             logger.error(f"[ERROR] Health check failed for model {model_name}: {str(e)}")
             return False
 
-    def verify_connection(self) -> bool:
+    def verify_connection(self):
         """Verify connection to LLM endpoint with improved error handling."""
         try:
-            # First try a basic health check
-            response = requests.get(f"{self.config.endpoint_url}/health", 
-                                 timeout=self.health_check_timeout)
-            if response.status_code == 200:
-                logger.info("[INFO] Successfully connected to LLM endpoint")
-                return True
-                
-            # If health check fails, try model info as fallback
-            response = requests.get(f"{self.config.endpoint_url}/models",
-                                 timeout=self.health_check_timeout)
-            if response.status_code == 200:
-                logger.info("[INFO] Successfully connected to LLM endpoint")
-                return True
-                
-            # Both checks failed with non-200 status
-            logger.error(f"Failed to connect to LLM endpoint. Status code: {response.status_code}")
-            return False
-            
-        except RequestException as e:
-            # Handle connection errors gracefully
-            logger.warning(f"Connection verification failed: {str(e)}")
-            return False
-
-    @retry_with_fallback
-    def infer(self, enhanced_input: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Send inference request to local LLM endpoint with retry and fallback mechanisms.
-        
-        Args:
-            enhanced_input: Dictionary containing prompt and context
-            
-        Returns:
-            Dict[str, Any]: LLM response with status and metadata
-        """
-        try:
-            # Prepare the request payload
-            payload = {
-                "model": self.config.model_name,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant that rephrases text in a natural way."},
-                ]
-            }
-            
-            # Add the user's query
-            query = enhanced_input.get("prompt", enhanced_input.get("query", ""))
-            if not query:
-                raise ValueError("No prompt or query provided in input")
-            
-            payload["messages"].append({"role": "user", "content": query})
-            
-            # Add max tokens if configured
-            if hasattr(self.config, 'max_tokens'):
-                payload["max_tokens"] = self.config.max_tokens
-                
-            headers = {
-                "Content-Type": "application/json"
-            }
-            
-            # Send actual request to the LLM endpoint
-            response = requests.post(
-                f"{self.config.endpoint_url.rstrip('/')}/v1/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=self.config.timeout
-            )
+            # Check if endpoint is reachable by getting available models
+            url = f"{self.config.endpoint_url}/v1/models"
+            response = requests.get(url, timeout=self.health_check_timeout)
             response.raise_for_status()
             
-            result = response.json()
+            # Update health status
+            self.health_status[self.config.model_name] = True
+            self.last_health_check[self.config.model_name] = datetime.now()
             
-            # Extract the actual response content
-            if result and "choices" in result and len(result["choices"]) > 0:
-                content = result["choices"][0].get("message", {}).get("content", "")
-                if not content:
-                    raise ValueError("Empty response content from LLM")
-                    
-                return {
-                    "response": content,
-                    "status": "success",
-                    "metadata": {
-                        "model": result.get("model", self.config.model_name),
-                        "usage": result.get("usage", {}),
-                    }
-                }
-            else:
-                logger.error(f"Unexpected LLM response format: {result}")
-                raise ValueError("Invalid response format from LLM")
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"LLM request failed: {str(e)}")
-            raise ConnectionError(f"Failed to connect to LLM endpoint: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error during inference: {str(e)}")
+            logger.info("[INFO] Successfully connected to LLM endpoint")
+            return True
+            
+        except RequestException as e:
+            self.health_status[self.config.model_name] = False
+            logger.error(f"Error verifying connection: {str(e)}")
             raise
-
+            
     def switch_model(self, endpoint: Optional[str] = None, model_name: Optional[str] = None) -> bool:
         """
         Switch to a different model or endpoint with health verification.
@@ -336,7 +250,7 @@ class LocalLLMProvider(BaseLLMProvider):
             # Verify the new configuration works
             if not self.check_model_health(self.config.model_name):
                 # Try to find a healthy fallback model
-                for model in self.fallback_models:
+                for model in ModelConfigs.get_fallback_models(self.model_type):
                     if self.check_model_health(model):
                         logger.info(f"Switching to healthy model: {model}")
                         self.switch_model(model_name=model)
@@ -350,9 +264,194 @@ class LocalLLMProvider(BaseLLMProvider):
             logger.error(f"Error switching model: {str(e)}")
             return False
 
+    @retry_with_fallback
+    def infer(self, enhanced_input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Send inference request to local LLM endpoint with retry and fallback mechanisms.
+        
+        Args:
+            enhanced_input: Dictionary containing prompt and context
+            
+        Returns:
+            Dict[str, Any]: LLM response with status and metadata
+        """
+        try:
+            # Prepare the request payload
+            messages = []
+            
+            # Add system prompt
+            messages.append({
+                "role": "system",
+                "content": self.system_prompt
+            })
+            
+            # Add context if available
+            if "context" in enhanced_input:
+                for ctx in enhanced_input["context"]:
+                    messages.append({
+                        "role": "assistant",
+                        "content": ctx
+                    })
+            
+            # Add the user's query
+            query = enhanced_input.get("prompt", enhanced_input.get("query", ""))
+            if not query:
+                raise ValueError("No prompt or query provided in input")
+            
+            messages.append({
+                "role": "user",
+                "content": query
+            })
+            
+            # Prepare the complete payload
+            payload = {
+                "model": self.config.model_name,
+                "messages": messages,
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_tokens,
+                "top_p": self.config.top_p,
+                "frequency_penalty": self.config.frequency_penalty,
+                "presence_penalty": self.config.presence_penalty
+            }
+            
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            # Send request to the LLM endpoint
+            response = requests.post(
+                f"{self.config.endpoint_url}/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=self.config.timeout
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            # Extract the response content
+            if result and "choices" in result and len(result["choices"]) > 0:
+                content = result["choices"][0].get("message", {}).get("content", "")
+                if not content:
+                    raise ValueError("Empty response content from LLM")
+                
+                # Parse the response based on model type
+                if self.model_type in [ModelType.HUMANIZE, ModelType.SEARCH]:
+                    try:
+                        parsed_content = json.loads(content)
+                        response_data = parsed_content
+                    except json.JSONDecodeError:
+                        logger.error("Failed to parse JSON response")
+                        response_data = {"error": "Invalid JSON response"}
+                else:
+                    response_data = {"text": content}
+                
+                return {
+                    "response": response_data,
+                    "status": "success",
+                    "metadata": {
+                        "model": result.get("model", self.config.model_name),
+                        "usage": result.get("usage", {}),
+                        "model_type": self.model_type.value
+                    }
+                }
+            else:
+                logger.error(f"Unexpected LLM response format: {result}")
+                raise ValueError("Invalid response format from LLM")
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"LLM request failed: {str(e)}")
+            raise ConnectionError(f"Failed to connect to LLM endpoint: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error during inference: {str(e)}")
+            raise
+
+    @retry_with_fallback
+    def generate(self, messages: List[Dict[str, str]], stream: bool = False, **kwargs) -> Dict[str, Any]:
+        """
+        Generate chat completion response.
+        
+        Args:
+            messages: List of message dictionaries with 'role' and 'content'
+            stream: If True, return a generator that yields response chunks
+            **kwargs: Additional parameters for the model
+            
+        Returns:
+            If stream=True: Generator yielding response chunks
+            If stream=False: Complete response as a dictionary
+        """
+        # Prepare the request
+        if not messages[0].get('role') == 'system':
+            messages.insert(0, {
+                'role': 'system',
+                'content': self.system_prompt
+            })
+            
+        url = f"{self.config.endpoint_url}/v1/chat/completions"
+        headers = {'Content-Type': 'application/json'}
+        
+        data = {
+            'model': self.config.model_name,
+            'messages': messages,
+            'temperature': kwargs.get('temperature', self.config.temperature),
+            'max_tokens': kwargs.get('max_tokens', self.config.max_tokens),
+            'stream': stream
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=data, stream=stream, timeout=self.config.timeout)
+            response.raise_for_status()
+            
+            if stream:
+                def generate_chunks():
+                    for line in response.iter_lines():
+                        if line:
+                            try:
+                                chunk = json.loads(line.decode('utf-8').removeprefix('data: '))
+                                if 'error' in chunk:
+                                    raise Exception(f"Error from LLM: {chunk['error']}")
+                                if chunk.get('choices', [{}])[0].get('delta', {}).get('content'):
+                                    yield chunk['choices'][0]['delta']['content']
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to decode JSON from chunk: {line}")
+                            except Exception as e:
+                                logger.error(f"Error processing chunk: {str(e)}")
+                                raise
+                return generate_chunks()
+            else:
+                result = response.json()
+                if 'error' in result:
+                    raise Exception(f"Error from LLM: {result['error']}")
+                
+                # Handle different response formats
+                try:
+                    if 'choices' in result and result['choices']:
+                        choice = result['choices'][0]
+                        if 'message' in choice:
+                            return {
+                                'content': choice['message'].get('content', ''),
+                                'role': choice['message'].get('role', 'assistant'),
+                                'finish_reason': choice.get('finish_reason', 'stop')
+                            }
+                        elif 'text' in choice:
+                            return {
+                                'content': choice['text'],
+                                'role': 'assistant',
+                                'finish_reason': choice.get('finish_reason', 'stop')
+                            }
+                    raise ValueError("Unexpected response format from LLM")
+                except (KeyError, IndexError) as e:
+                    logger.error(f"Error parsing LLM response: {str(e)}, Response: {result}")
+                    raise ValueError(f"Invalid response format from LLM: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Error in generate: {str(e)}")
+            raise
+
+    @retry_with_fallback
     def generate_text(self, text: str, stream: bool = False, **kwargs) -> Any:
         """
-        Generate text with optional streaming support.
+        Generate text completion using chat endpoint for consistency.
         
         Args:
             text: Input text to process
@@ -363,69 +462,10 @@ class LocalLLMProvider(BaseLLMProvider):
             If stream=True: Generator yielding response chunks
             If stream=False: Complete response as a string
         """
-        try:
-            # Prepare the request payload
-            payload = {
-                "model": self.config.model_name,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant that rephrases text in a natural way."},
-                    {"role": "user", "content": text}
-                ],
-                "stream": stream
-            }
-            
-            # Add additional parameters
-            if hasattr(self.config, 'max_tokens'):
-                payload["max_tokens"] = kwargs.get('max_tokens', self.config.max_tokens)
-            if 'temperature' in kwargs:
-                payload["temperature"] = kwargs['temperature']
-                
-            headers = {
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream" if stream else "application/json"
-            }
-            
-            # Send request to the LLM endpoint
-            response = requests.post(
-                f"{self.config.endpoint_url.rstrip('/')}/v1/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=self.config.timeout,
-                stream=stream
-            )
-            response.raise_for_status()
-            
-            if stream:
-                def generate():
-                    for line in response.iter_lines():
-                        if line:
-                            try:
-                                # Remove 'data: ' prefix if present
-                                line = line.decode('utf-8')
-                                if line.startswith('data: '):
-                                    line = line[6:]
-                                if line == '[DONE]':
-                                    break
-                                    
-                                # Parse the JSON response
-                                chunk = json.loads(line)
-                                if chunk and "choices" in chunk and len(chunk["choices"]) > 0:
-                                    content = chunk["choices"][0].get("delta", {}).get("content", "")
-                                    if content:
-                                        yield content
-                            except json.JSONDecodeError:
-                                logger.warning(f"Failed to decode JSON from chunk: {line}")
-                            except Exception as e:
-                                logger.error(f"Error processing chunk: {str(e)}")
-                                
-                return generate()
-            else:
-                result = response.json()
-                if result and "choices" in result and len(result["choices"]) > 0:
-                    return result["choices"][0].get("message", {}).get("content", "")
-                else:
-                    raise ValueError("Invalid response format from LLM")
-                    
-        except Exception as e:
-            logger.error(f"Error in generate_text: {str(e)}")
-            raise
+        messages = [{'role': 'user', 'content': text}]
+        response = self.generate(messages, stream=stream, **kwargs)
+        
+        if stream:
+            return response
+        else:
+            return response['content']
