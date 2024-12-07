@@ -24,7 +24,7 @@ Architecture:
 Usage:
     To run the application:
     1. Set the APP_ENV environment variable (development/production)
-    2. Execute this module directly: python -m text_humanizer.main
+    2. Execute this module directly: python3 -m text_humanizer.main
     3. Access the web interface at http://localhost:5000
     4. Use the API endpoints for programmatic access
 

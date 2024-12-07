@@ -16,8 +16,8 @@ class Config:
     LLM_HEALTH_CHECK_INTERVAL = 60  # Health check cache duration in seconds
     LLM_FALLBACK_MODELS: List[str] = [
         "internlm2_5-20b-chat",  # Primary model
-        "internlm2_1-20b-chat",  # Fallback 1
-        "internlm-chat-7b"       # Fallback 2 (smaller model)
+        "qwen2.5-14b-instruct",  # Fallback 1
+        "mistral-nemo-instruct-2407", # Fallback 2 (smaller model)
     ]
     LLM_HEALTH_CHECK_TIMEOUT = 3  # Timeout for health check requests in seconds
 
